@@ -12,24 +12,17 @@
 // ******************************************************************************************* //
 
 typedef enum stateEnum { //all states are for debouncing; states handle LEDs.
-    enterPasscode,
-    enterWait,
+    prompt,
     checkDigit,
     writeDigit,
     checkPasscode,
     badPasscode,
     goodPasscode,
-    reset,
-    writeSetMode,
-    setMode,
-    setWait,
-    checkDigitSet,
     invalidPasscode,
     validPasscode,
     waitPress,
     readKey,
     waitRelease,
-    debouncePress,
     debounceRelease,     
 } stateType;
 
@@ -38,18 +31,18 @@ typedef enum modeEnum {
    modeSet   
 } modeType;
 
-volatile stateType state = enterPasscode;
+volatile stateType state = prompt;
 
 volatile modeType mode = modeCheck;
 
 int main(void)
 {
-    char key;
-    int i, j;
-    int keys[4];
+    char key;               //Current key being registered
+    int i, j;               
+    int keys[4];            //Array of keys on screen
     int passcodes[10][4];
-    int passcodeCount = 0;
-    int keyCount;
+    int passcodeCount = 0;  //counts how many passcodes are stored. Max 10
+    int keyCount;           //counts how many keys have been pressed (on the screen)
     
     SYSTEMConfigPerformance(10000000);
     enableInterrupts();
@@ -57,28 +50,51 @@ int main(void)
     initLCD();
     initKeypad();
     
-    for(i = 0; i < 10; ++i) {
+    for(i = 0; i < 10; ++i) {           //Init passwords to invalid values
         for(j = 0; j < 4; ++j) {
             passcodes[i][j] = -1;
         }
      }
     
+    /*void startSequence(modeType mode) {
+        keyCount = 0;
+        for(i = 0; i < 4; ++i) {
+            keys[i] = -1;
+        }
+        clearLCD();
+        moveCursorLCD(0,1);
+        switch(mode) {
+            case modeCheck:
+                printStringLCD("Enter");
+                break;
+            case modeSet:
+                printStringLCD("Set Mode");
+                break;
+        }
+        moveCursorLCD(0,2);
+    }*/
+    
     while(1) {
         switch(state) {
-            case enterPasscode:
-                clearLCD();
-                moveCursorLCD(0,1);
-                printStringLCD("Enter");
-                moveCursorLCD(0,2);
+            case prompt:
                 keyCount = 0;
                 for(i = 0; i < 4; ++i) {
                     keys[i] = -1;
                 }
-                
-                mode = modeCheck;
-                state = enterWait;
+                clearLCD();
+                moveCursorLCD(0,1);
+                switch(mode) {
+                    case modeCheck:
+                        printStringLCD("Enter");
+                        break;
+                    case modeSet:
+                        printStringLCD("Set Mode");
+                        break;
+                }
+                moveCursorLCD(0,2);  
+                state = waitPress;
                 break;
-            case enterWait:
+            case waitPress: //wait for keypress
                 break;
             case readKey:
                 key = scanKeypad();
@@ -88,52 +104,61 @@ int main(void)
                 break;
             case debounceRelease:
                 delayUs(5000);
-                switch(mode) {
-                    case modeCheck:
-                        state = checkDigit;
-                        break;
-                    case modeSet:
-                        state = checkDigitSet;
-                        break;
-                }
+                state = checkDigit;
                 break;  
             case checkDigit:
                 if(key == -1) {
-                    state = enterWait;
+                    state = waitPress;
                     break;
                 }
                 keys[keyCount] = key;
                 ++keyCount;
                 
-                if(keyCount == 4 && key != '*' && key != '#') {
-                    state = checkPasscode;
-                }
+                switch(mode) {
+                    case modeCheck:
+                        if(keyCount == 4 && key != '*' && key != '#') {
+                            state = checkPasscode;
+                        }
+
+                        if(keyCount < 4 && key != '#' && (keyCount == 1 || key != '*')){
+                            state = writeDigit;
+                        }               
+                        if(key == '#') {
+                            state = badPasscode;
+                        }
+                        else if (key == '*' && keyCount > 1 && !(keys[0] == '*' && keys[1] == '*')) {
+                            state = badPasscode;
+                        }
+                        else if (key != '*' && keys[0] == '*'){
+                            state = badPasscode;
+                        }
+                        if(keys[0] == '*' && keys[1] == '*') {
+                            mode = modeSet;
+                            state = prompt;
+                        }
+                        break;
+                    case modeSet:
+                        if(passcodeCount == 10) {   //sets max passcode limitation
+                            state = invalidPasscode;
+                            break;
+                        }
+                        if(keyCount < 4) {
+                            state = writeDigit;
+                        }
+                        if(keyCount == 4) {
+                            state = validPasscode;
+                        }
+                        if(key == '*' || key == '#') {
+                            state = invalidPasscode;
+                        }
                 
-                if(keyCount < 4 && key != '#' && (keyCount == 1 || key != '*')){
-                    state = writeDigit;
-                }               
-                if(key == '#') {
-                    state = badPasscode;
-                }
-                else if (key == '*' && keyCount > 1 && !(keys[0] == '*' && keys[1] == '*')) {
-                    state = badPasscode;
-                }
-                else if (key != '*' && keys[0] == '*'){
-                    state = badPasscode;
-                }
-                if(keys[0] == '*' && keys[1] == '*') {
-                    state = setMode;
+                        break;
                 }
                 break;
                 
             case writeDigit:
                 printCharLCD(key);
-                if(mode == modeCheck) {
-                    state = enterWait;
-                }
-                else if (mode == modeSet) {
-                    state = setWait;
-                }
+                state = waitPress;
                 break;
                 
             case checkPasscode:
@@ -160,7 +185,8 @@ int main(void)
                 for(i = 0; i < 2000; ++i) {
                     delayUs(1000);
                 }
-                state = enterPasscode;
+                mode = modeCheck;
+                state = prompt;
                 break;
                 
             case goodPasscode:
@@ -170,47 +196,10 @@ int main(void)
                 for(i = 0; i < 2000; ++i) {
                     delayUs(1000);
                 }
-                state = enterPasscode;
+                mode = modeCheck;
+                state = prompt;
                 break;
-                
-            case setMode:
-                mode = modeSet;
-                for(i = 0; i < 4; ++i) {
-                    keys[i] = -1;                  
-                }
-                keyCount = 0;
-                clearLCD();
-                moveCursorLCD(0,1);
-                printStringLCD("Set Mode");
-                moveCursorLCD(0,2);
-                state = setWait;
-                break;
-                
-            case setWait:
-                break;
-                
-            case checkDigitSet:
-                if(key == -1) {
-                    state = setWait;
-                    break;
-                }
-                keys[keyCount] = key;
-                ++keyCount;
-                if(passcodeCount == 10) {   //sets max passcode limitation
-                    state = invalidPasscode;
-                    break;
-                }
-                if(keyCount < 4) {
-                    state = writeDigit;
-                }
-                if(keyCount == 4) {
-                    state = validPasscode;
-                }
-                if(key == '*' || key == '#') {
-                    state = invalidPasscode;
-                }
-                break;
-                
+                               
             case validPasscode:
                 for(i = 0; i < 4; ++i) {
                     passcodes[passcodeCount][i] = keys[i];
@@ -222,7 +211,8 @@ int main(void)
                 for(i = 0; i < 2000; ++i) {
                     delayUs(1000);
                 }
-                state = enterPasscode;
+                mode = modeCheck;
+                state = prompt;
                 break;
                 
             case invalidPasscode:
@@ -232,7 +222,8 @@ int main(void)
                 for(i = 0; i < 2000; ++i) {
                     delayUs(1000);
                 }
-                state = enterPasscode;
+                mode = modeCheck;
+                state = prompt;
                 break;
         }
     }
@@ -260,7 +251,7 @@ void __ISR(_CHANGE_NOTICE_VECTOR, IPL7SRS) _CNInterrupt(void) {
     y = PORTD;
     z = PORTE;
     
-    if(state == enterWait || state == setWait) {
+    if(state == waitPress) {
         state = readKey;
     }
     else if (state == waitRelease && COL_P3 && COL_P1 && COL_P5 ) {
